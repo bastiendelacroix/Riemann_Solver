@@ -1,10 +1,9 @@
 module Riemman   
     using Plots
-    plotly()
-
-    using Plots
     using WriteVTK
     plotly()
+    using ForwardDiff
+    using Roots
 
 
     abstract type AbstractWaveType end
@@ -14,8 +13,7 @@ module Riemman
 
  
     tol = 1e-6
-    gi = 0.1
-    limit_Newton = 10000
+    limit_Newton = 100000
 
     xmin = -1
     xmax = 1
@@ -23,13 +21,14 @@ module Riemman
     g  = 9.81 
     θ  = deg2rad(90.0)
     γ = 0.067
-    S = γ * (cos(θ) - 1)
-    #S = 0
-    ncell = 50
-    nite = 15
+    #S = γ * (cos(θ) - 1)
+    S = 0
+    ncell = 1000
+    nite = 20
     Δt = 0.01 
     t = 0
     myzero = 1e-12
+    newton_auto = true
 
 
     hth = zeros(ncell)
@@ -45,14 +44,13 @@ module Riemman
 
 
     # Parameter
-    hL = 0.5
-    uL = 0.1
+    hL = 0.004924
+    uL = -0.001963
     αL = 1
 
-    hR = 0.0
-    uR = 0.00
-    αR = 0
-
+    hR = 6.5621e-5
+    uR = 0.147648
+    αR = 1
 
     function init!(h, u, α, hth, uth, αth)
         for icell in 1:ncell
@@ -91,19 +89,32 @@ module Riemman
         count_newton = 0
         left_wave, right_wave = compute_wave_state(ΠL, ΠR, ig)
         f, df, fL, fR = define_pressure_function(hL, hR, uL, uR, αL, αR, left_wave, right_wave)
-        ΠStar = ig - f(ig)/(df(ig) + myzero)
-        while abs(ig - ΠStar)/(0.5*(ig + ΠStar)) > tol 
-            ig = ΠStar
-            left_wave, right_wave = compute_wave_state(ΠL, ΠR, ig)
-            f, df, fL, fR = define_pressure_function(hL, hR, uL, uR, αL, αR, left_wave, right_wave)
+        display(plot(f, -0.001 , 0.0005))
+        if newton_auto ==true
+            #D(f) = p -> ForwardDiff.derivative(f,float(p))
+            #ΠStar = find_zero((f,df), ig, Roots.Newton())
+            #ΠStar = fzero(f, min(ΠL,ΠR), max(ΠL, ΠR))
+            ΠStar = fzero(f, ig)
+        else
+            @show left_wave, right_wave
             ΠStar = ig - f(ig)/(df(ig) + myzero)
-            count_newton += 1
-            if count_newton > limit_Newton
-                error("Newton do not converge")
+            @show ΠStar ΠL ΠR
+            while abs(abs(ig - ΠStar)/(0.5*(ig + ΠStar))) > tol 
+                ig = ΠStar
+                left_wave, right_wave = compute_wave_state(ΠL, ΠR, ig)
+                @show count_newton 
+                @show left_wave, right_wave
+                @show ΠStar
+                f, df, fL, fR = define_pressure_function(hL, hR, uL, uR, αL, αR, left_wave, right_wave)
+                ΠStar = ig - f(ig)/(df(ig) + myzero)
+                count_newton += 1
+                if count_newton > limit_Newton
+                    error("Newton do not converge")
+                end
             end
         end
-        @show count_newton
-        display(plot(f, -0.1 , 0.1))
+        @show count_newton 
+        display(plot(f, -0.001 , 0.0005))
         #error("")
         return ΠStar
     end
@@ -146,11 +157,11 @@ module Riemman
 
     function define_pressure_function(hL, hR, uL, uR, αL, αR, ::shock, ::rarefaction)
         fL(p) = (√(2*(p-αL * S)/ (αL*g)) - hL) / √(hL * √(2*(p-αL * S)/ (αL*g))) * √(g/2 * (hL + √(2*(p-αL * S)/ (αL*g))))
-        fR(p) = -2* (√(g * hR) - (2 * g * (p - αR * S) / αR))^1/4
+        fR(p) = -2* (√(g * hR) - (2 * g * (p - αR * S) / αR)^(1/4))
         hLStar(p) = √(2*(p - αL * S) / (αL * g))
         dhLStar(p) = 1/ √(2 * αL * g * (p - αL * S))
-        dfL(p) = dhLStar(p) * ((2 * hL * hLStar(p) - (hLStar(p) - hL)) / ( 2 * (hL * hLStar(p))^3/2) * √(g / 2 * (hLStar(p) + hL)) + g / 4 * (hLStar(p) - hL) / √(g / 2 * ( hL + hLStar(p)) * hLStar(p) * hL))
-        dfR(p) = 0.5 * g / αR * (p - αR * S)^(-3/4)
+        dfL(p) = dhLStar(p) * ((2 * hL * hLStar(p) - (hLStar(p) - hL)) / ( 2 * (hL * hLStar(p))^(3/2)) * √(g / 2 * (hLStar(p) + hL)) + g / 4 * (hLStar(p) - hL) / √(g / 2 * ( hL + hLStar(p)) * hLStar(p) * hL))
+        dfR(p) = 0.5 * (2*g / αR)^(1/4) * (p - αR * S)^(-3/4)
         f(p) = fL(p) + fR(p) + uR - uL
         df(p) = dfL(p) + dfR(p)
         return f, df, fL, fR
@@ -163,42 +174,40 @@ module Riemman
         dhLStar(p) = 1/ √(2 * αL * g * (p - αL * S))
         hRStar(p) = √(2*(p - αR * S) / (αR * g))
         dhRStar(p) = 1/ √(2 * αR * g * (p - αR * S))
-        dfL(p) = dhLStar(p) * ((2 * hL * hLStar(p) - (hLStar(p) - hL)) / ( 2 * (hL * hLStar(p))^3/2) * √(g / 2 * (hLStar(p) + hL)) + g / 4 * (hLStar(p) - hL) / √(g / 2 * ( hL + hLStar(p)) * hLStar(p) * hL))
-        dfR(p) = dhRStar(p) * ((2 * hR * hRStar(p) - (hRStar(p) - hR)) / ( 2 * (hR * hRStar(p))^3/2) * √(g / 2 * (hRStar(p) + hR)) + g / 4 * (hRStar(p) - hR) / √(g / 2 * ( hR + hRStar(p)) * hRStar(p) * hR))
+        dfL(p) = dhLStar(p) * ((2 * hL * hLStar(p) - (hLStar(p) - hL)) / ( 2 * (hL * hLStar(p))^(3/2)) * √(g / 2 * (hLStar(p) + hL)) + g / 4 * (hLStar(p) - hL) / √(g / 2 * ( hL + hLStar(p)) * hLStar(p) * hL))
+        dfR(p) = dhRStar(p) * ((2 * hR * hRStar(p) - (hRStar(p) - hR)) / ( 2 * (hR * hRStar(p))^(3/2)) * √(g / 2 * (hRStar(p) + hR)) + g / 4 * (hRStar(p) - hR) / √(g / 2 * ( hR + hRStar(p)) * hRStar(p) * hR))
         f(p) = fL(p) + fR(p) + uR - uL
         df(p) = dfL(p) + dfR(p)
         return f, df, fL, fR
     end
 
     function define_pressure_function(hL, hR, uL, uR, αL, αR, ::rarefaction, ::rarefaction)
-        fL(p) = -2* (√(g * hL) - (2 * g * (p - αL * S) / αL))^1/4
-        fR(p) = -2* (√(g * hR) - (2 * g * (p - αR * S) / αR))^1/4
-        dfL(p) = 0.5 * g / αL * (p - αL * S)^(-3/4)
-        dfR(p) = 0.5 * g / αR * (p - αR * S)^(-3/4)
+        fL(p) = -2* (√(g * hL) - (2 * g * (p - αL * S) / αL)^(1/4))
+        fR(p) = -2* (√(g * hR) - (2 * g * (p - αR * S) / αR)^(1/4))
+        dfL(p) = 0.5 * (2*g / αL)^(1/4) * (p - αL * S)^(-3/4)
+        dfR(p) = 0.5 * (2*g / αR)^(1/4) * (p - αR * S)^(-3/4)
         f(p) = fL(p) + fR(p) + uR - uL
         df(p) = dfL(p) + dfR(p)
         return f, df, fL, fR
     end
 
     function define_pressure_function(hL, hR, uL, uR, αL, αR, ::rarefaction, ::shock)
-        fL(p) = -2* (√(g * hL) - (2 * g * (p - αL * S) / αL))^1/4
-        fR(p) = (√(2*(p-αR * S)/ (αR*g)) - hR) / √(hR * √(2*(p-αR * S)/ (αR*g))) * √(g/2 * (hR + √(2*(p-αR * S)/ (αR*g))))
         hRStar(p) = √(2*(p - αR * S) / (αR * g))
         dhRStar(p) = 1/ √(2 * αR * g * (p - αR * S))
-        dfL(p) = 0.5 * g / αL * (p - αL * S)^(-3/4)
-        dfR(p) = dhRStar(p) * ((2 * hR * hRStar(p) - (hRStar(p) - hR)) / ( 2 * (hR * hRStar(p))^3/2) * √(g / 2 * (hRStar(p) + hR)) + g / 4 * (hRStar(p) - hR) / √(g / 2 * ( hR + hRStar(p)) * hRStar(p) * hR))
+        fL(p) = -2* (√(g * hL) - (2 * g * (p - αL * S) / αL)^(1/4))
+        fR(p) = (hRStar(p) - hR) / √(hR * hRStar(p)) * √(g/2 * (hR +hRStar(p)))
+        dfL(p) = 0.5 * (2*g / αL)^(1/4) * (p - αL * S)^(-3/4)
+        dfR(p) = dhRStar(p) * ((2 * hR * hRStar(p) - (hRStar(p) - hR)) / ( 2 * (hR * hRStar(p))^(3/2)) * √(g / 2 * (hRStar(p) + hR)) + g / 4 * (hRStar(p) - hR) / √(g / 2 * ( hR + hRStar(p)) * hRStar(p) * hR))
         f(p) = fL(p) + fR(p) + uR - uL
         df(p) = dfL(p) + dfR(p)
         return f, df, fL, fR
     end
 
-
-
     function compute_state!(h, u, α, hL, hR, uL, uR, αL, αR, ΠStar, t, ::rarefaction, ::dry)
-        uStar = uL + 2*(√(g*hL) - (-2*αL * g * S)^1/4)
         hStar = √(-2*αL*S/g)
-        STL   =  uStar - √(g * hStar)
         SHL   = uL - √(g * hL)  
+        uStar = uL + 2*(√(g*hL) - (-2*αL * g * S)^(1/4))
+        STL   =  uStar - √(g * hStar)
         for icell in 1:ncell
             if xcell[icell] / t ≤ SHL  
                 h[icell], u[icell], α[icell] = left_state()
@@ -214,8 +223,8 @@ module Riemman
 
     function compute_state!(h, u, α, hL, hR, uL, uR, αL, αR, ΠStar, t, ::shock, ::dry)
         hStar = √(-2*αL*S/g)
-        uStar = uL - (hStar - hL) / √(hStar * hL + myzero) * √(g/2*(hStar + hL))
         S1   =  uL - √(g*hStar*(hStar+hL)/(2*hL))
+        uStar = uL - (hStar - hL) / √(hStar * hL + myzero) * √(g/2*(hStar + hL))
         for icell in 1:ncell
             if xcell[icell] / t ≤ S1  
                 h[icell], u[icell], α[icell] = left_state()
@@ -244,8 +253,8 @@ module Riemman
     end
 
     function compute_state!(h, u, α, hL, hR, uL, uR, αL, αR, ΠStar, t, ::dry, ::rarefaction)
-        uStar =  uR - 2*(√(g*hR) - (-2*αR*S*g)^1/4)
         hStar = √(-2*αR*S/g)
+        uStar =  uR - 2*(√(g*hR) - (-2*αR*S*g)^(1/4))
         STR   =  uStar + √(g * hStar)
         SHR   = uR + √(g * hR)  
         for icell in 1:ncell
@@ -262,13 +271,13 @@ module Riemman
     end
 
     function compute_state!(h, u, α, hL, hR, uL, uR, αL, αR, ΠStar, t, ::rarefaction, ::shock)
-        fL = define_pressure_function(hL, hR, uL, uR, αL, αR, rarefaction(), shock())[3]
-        fR = define_pressure_function(hL, hR, uL, uR, αL, αR, rarefaction(), shock())[4]
-        uStar = 0.5 * (uR + uL) + 0.5* (fR(ΠStar) + fL(ΠStar)) 
+        _, _, fL, fR = define_pressure_function(hL, hR, uL, uR, αL, αR, rarefaction(), shock())
+        #fR = define_pressure_function(hL, hR, uL, uR, αL, αR, rarefaction(), shock())[4]
         hLStar = √(2*(ΠStar - αL * S) / (αL * g))
         hRStar = √(2*(ΠStar - αR * S) / (αR * g))
-        STL   =  uStar + √(g * hLStar)
-        SHL   = uL + √(g * hL)  
+        uStar = 0.5 * (uR + uL) + 0.5* (fR(ΠStar) - fL(ΠStar)) 
+        SHL   = uL - √(g * hL)  
+        STL   =  uStar - √(g * hLStar)
         S3   =  uR + √(g*hRStar*(hRStar+hR)/(2*hR))
         for icell in 1:ncell
             if xcell[icell] / t ≤ SHL  
@@ -287,12 +296,11 @@ module Riemman
     end
     
     function compute_state!(h, u, α, hL, hR, uL, uR, αL, αR, ΠStar, t, ::shock, ::shock)
-        fL = define_pressure_function(hL, hR, uL, uR, αL, αR, rarefaction(), shock())[3]
-        fR = define_pressure_function(hL, hR, uL, uR, αL, αR, rarefaction(), shock())[4]
-        uStar = 0.5 * (uR + uL) + 0.5* (fR(ΠStar) + fL(ΠStar)) 
+        _, _, fL, fR = define_pressure_function(hL, hR, uL, uR, αL, αR, rarefaction(), shock())
         hLStar = √(2*(ΠStar - αL * S) / (αL * g))
         hRStar = √(2*(ΠStar - αR * S) / (αR * g))
         S1   =  uL - √(g*hLStar*(hLStar+hL)/(2*hL))
+        uStar = 0.5 * (uR + uL) + 0.5* (fR(ΠStar) - fL(ΠStar)) 
         S3   =  uR + √(g*hRStar*(hRStar+hR)/(2*hR))
         for icell in 1:ncell
             if xcell[icell] / t ≤ S1  
@@ -309,13 +317,12 @@ module Riemman
     end
     
     function compute_state!(h, u, α, hL, hR, uL, uR, αL, αR, ΠStar, t, ::rarefaction, ::rarefaction)
-        fL = define_pressure_function(hL, hR, uL, uR, αL, αR, rarefaction(), shock())[3]
-        fR = define_pressure_function(hL, hR, uL, uR, αL, αR, rarefaction(), shock())[4]
-        uStar = 0.5 * (uR + uL) + 0.5* (fR(ΠStar) + fL(ΠStar)) 
+        _, _, fL, fR = define_pressure_function(hL, hR, uL, uR, αL, αR, rarefaction(), shock())
         hLStar = √(2*(ΠStar - αL * S) / (αL * g))
         hRStar = √(2*(ΠStar - αR * S) / (αR * g))
-        STL   =  uStar + √(g * hLStar)
-        SHL   = uL + √(g * hL)  
+        uStar = 0.5 * (uR + uL) + 0.5* (fR(ΠStar) - fL(ΠStar)) 
+        SHL   = uL - √(g * hL)  
+        STL   =  uStar - √(g * hLStar)
         STR   =  uStar + √(g * hRStar)
         SHR   = uR + √(g * hR)  
         for icell in 1:ncell
@@ -337,9 +344,8 @@ module Riemman
     end
     
     function compute_state!(h, u, α, hL, hR, uL, uR, αL, αR, ΠStar, t, ::shock, ::rarefaction)
-        fL = define_pressure_function(hL, hR, uL, uR, αL, αR, rarefaction(), shock())[3]
-        fR = define_pressure_function(hL, hR, uL, uR, αL, αR, rarefaction(), shock())[4]
-        uStar = 0.5 * (uR + uL) + 0.5* (fR(ΠStar) + fL(ΠStar)) 
+        _, _, fL, fR = define_pressure_function(hL, hR, uL, uR, αL, αR, rarefaction(), shock())
+        uStar = 0.5 * (uR + uL) + 0.5* (fR(ΠStar) - fL(ΠStar)) 
         hLStar = √(2*(ΠStar - αL * S) / (αL * g))
         hRStar = √(2*(ΠStar - αR * S) / (αR * g))
         S1   =  uL - √(g*hLStar*(hLStar+hL)/(2*hL))
@@ -392,7 +398,7 @@ module Riemman
 
     function star_right_dry_state(::rarefaction)
         h = √(-2*αL*S/g)
-        u = uL + 2*(√(g*hL) - (-2*αL*S*g)^1/4)
+        u = uL + 2*(√(g*hL) - (-2*αL*S*g)^(1/4))
         α = αL
         return h, u, α
     end
@@ -406,7 +412,7 @@ module Riemman
 
     function star_left_dry_state(::rarefaction)
         h = √(-2*αR*S/g)
-        u = uR - 2*(√(g*hR) - (-2*αR*S*g)^1/4)
+        u = uR - 2*(√(g*hR) - (-2*αR*S*g)^(1/4))
         α = αR
         return h, u, α
     end
